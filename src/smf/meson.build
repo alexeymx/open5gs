@@ -46,6 +46,9 @@ libsmf_sources = files('''
     gn-handler.h
     s5c-build.h
     s5c-handler.h
+    s8-handler.h
+    s8-handler.c
+    s8-sm.c
     fd-path.h
     gx-handler.h
     gy-handler.h
@@ -82,6 +85,8 @@ libsmf_sources = files('''
     gn-handler.c
     s5c-build.c
     s5c-handler.c
+    s8-handler.c
+    s8-sm.c
     fd-path.c
     gx-path.c
     gy-path.c
@@ -108,8 +113,6 @@ libsmf_sources = files('''
     ngap-handler.c
     ngap-path.c
     metrics.c
-
-
 '''.split())
 
 redis_dep = dependency('hiredis')

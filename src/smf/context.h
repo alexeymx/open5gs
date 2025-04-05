@@ -82,6 +82,7 @@ typedef struct smf_context_s {
     int             p_cscf6_index;
 
     ogs_list_t      sgw_s5c_list;   /* SGW GTPC Node List */
+    ogs_list_t      sgw_s8_list;    /* SGW S8 Node List */
     ogs_list_t      ip_pool_list;
 
     ogs_hash_t      *supi_hash;     /* hash table (SUPI) */

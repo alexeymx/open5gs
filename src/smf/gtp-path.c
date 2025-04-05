@@ -771,3 +771,35 @@ static void bearer_timeout(ogs_gtp_xact_t *xact, void *data)
         break;
     }
 }
+
+int smf_s8_open(void)
+{
+    ogs_socknode_t *node = NULL;
+    ogs_sockaddr_t *addr = NULL;
+
+    ogs_list_for_each(&smf_self()->config.s8.addr_list, node) {
+        addr = node->addr;
+        ogs_assert(addr);
+
+        node->sock = ogs_gtp_server(node);
+        if (!node->sock) {
+            ogs_error("No gtp server socket");
+            return OGS_ERROR;
+        }
+
+        node->poll = ogs_pollset_add(ogs_app()->pollset,
+                OGS_POLLIN, node->sock->fd, smf_gtp_accept, node);
+        ogs_assert(node->poll);
+    }
+
+    return OGS_OK;
+}
+
+void smf_s8_close(void)
+{
+    ogs_socknode_t *node = NULL, *next_node = NULL;
+
+    ogs_list_for_each_safe(&smf_self()->config.s8.addr_list, next_node, node) {
+        ogs_socknode_remove(&smf_self()->config.s8.addr_list, node);
+    }
+}

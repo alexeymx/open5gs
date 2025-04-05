@@ -108,6 +108,10 @@ int smf_initialize(void)
     rv = smf_sbi_open();
     if (rv != 0) return OGS_ERROR;
 
+    /* Initialize S8 interface */
+    rv = smf_s8_open();
+    if (rv != 0) return OGS_ERROR;
+
     rv = smf_redis_init();
     if (rv != OGS_OK) {
         ogs_warn("Redis initialization failed, starting retry mechanism...");
