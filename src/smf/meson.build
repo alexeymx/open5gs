@@ -34,6 +34,9 @@ endforeach
 
 configure_file(output : 'smf-config.h', configuration : smf_conf)
 
+# Add OpenSSL dependency
+openssl_dep = dependency('openssl')
+
 libsmf_sources = files('''
     event.h
     timer.h
@@ -127,7 +130,8 @@ libsmf = static_library('smf',
                     libdiameter_gx_dep,
                     libdiameter_gy_dep,
                     libdiameter_s6b_dep,
-                    libpfcp_dep],
+                    libpfcp_dep,
+                    openssl_dep],
     install : false)
 
 libsmf_dep = declare_dependency(
@@ -139,7 +143,10 @@ libsmf_dep = declare_dependency(
                     libdiameter_gx_dep,
                     libdiameter_gy_dep,
                     libdiameter_s6b_dep,
-                    libpfcp_dep,  redis_dep, jsonc_dep])
+                    libpfcp_dep,
+                    redis_dep,
+                    jsonc_dep,
+                    openssl_dep])
 
 smf_sources = files('''
     app.c
