@@ -1,5 +1,8 @@
 #!/bin/bash
 
+sudo apt-get install libhiredis-dev
+sudo apt-get install libjson-c-dev
+
 meson setup --wipe build && ninja -C build
 mkdir sudo mkdir -p /usr/local/lib/freeDiameter
 sudo cp /home/ilinsky/open5gs_build/open5gs/build/subprojects/freeDiameter/extensions/* /usr/local/lib/freeDiameter/ -R

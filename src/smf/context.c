@@ -296,56 +296,688 @@ int smf_context_parse_config(void)
     int rv;
     yaml_document_t *document = NULL;
     ogs_yaml_iter_t root_iter;
+    int idx = 0;
 
     document = ogs_app()->document;
     ogs_assert(document);
 
-    rv = ogs_yaml_iter_init(&root_iter, document);
+    rv = smf_context_prepare();
     if (rv != OGS_OK) return rv;
 
+    ogs_yaml_iter_init(&root_iter, document);
     while (ogs_yaml_iter_next(&root_iter)) {
         const char *root_key = ogs_yaml_iter_key(&root_iter);
         ogs_assert(root_key);
-        if (!strcmp(root_key, "smf")) {
+        if ((!strcmp(root_key, "smf")) &&
+            (idx++ == ogs_app()->config_section_id)) {
             ogs_yaml_iter_t smf_iter;
             ogs_yaml_iter_recurse(&root_iter, &smf_iter);
             while (ogs_yaml_iter_next(&smf_iter)) {
                 const char *smf_key = ogs_yaml_iter_key(&smf_iter);
                 ogs_assert(smf_key);
-                if (!strcmp(smf_key, "s8")) {
-                    ogs_yaml_iter_t s8_iter;
-                    ogs_yaml_iter_recurse(&smf_iter, &s8_iter);
-                    while (ogs_yaml_iter_next(&s8_iter)) {
-                        const char *s8_key = ogs_yaml_iter_key(&s8_iter);
-                        ogs_assert(s8_key);
-                        if (!strcmp(s8_key, "addr")) {
-                            const char *v = ogs_yaml_iter_value(&s8_iter);
-                            if (v) {
-                                ogs_sockaddr_t *addr = NULL;
-                                rv = ogs_getaddrinfo(&addr, AF_UNSPEC, v, 0, 0);
-                                ogs_assert(rv == OGS_OK);
-                                smf_self()->config.s8.addr = addr;
-                            }
-                        } else if (!strcmp(s8_key, "addr6")) {
-                            const char *v = ogs_yaml_iter_value(&s8_iter);
-                            if (v) {
-                                ogs_sockaddr_t *addr6 = NULL;
-                                rv = ogs_getaddrinfo(&addr6, AF_UNSPEC, v, 0, 0);
-                                ogs_assert(rv == OGS_OK);
-                                smf_self()->config.s8.addr6 = addr6;
-                            }
-                        } else if (!strcmp(s8_key, "port")) {
-                            const char *v = ogs_yaml_iter_value(&s8_iter);
-                            if (v) smf_self()->config.s8.port = atoi(v);
-                        } else if (!strcmp(s8_key, "port6")) {
-                            const char *v = ogs_yaml_iter_value(&s8_iter);
-                            if (v) smf_self()->config.s8.port6 = atoi(v);
+                if (!strcmp(smf_key, "freeDiameter")) {
+                    yaml_node_t *node =
+                        yaml_document_get_node(document, smf_iter.pair->value);
+                    ogs_assert(node);
+                    if (node->type == YAML_SCALAR_NODE) {
+                        self.diam_conf_path = ogs_yaml_iter_value(&smf_iter);
+                    } else if (node->type == YAML_MAPPING_NODE) {
+                        ogs_yaml_iter_t fd_iter;
+                        ogs_yaml_iter_recurse(&smf_iter, &fd_iter);
+
+                        while (ogs_yaml_iter_next(&fd_iter)) {
+                            const char *fd_key = ogs_yaml_iter_key(&fd_iter);
+                            ogs_assert(fd_key);
+                            if (!strcmp(fd_key, "identity")) {
+                                self.diam_config->cnf_diamid =
+                                    ogs_yaml_iter_value(&fd_iter);
+                            } else if (!strcmp(fd_key, "realm")) {
+                                self.diam_config->cnf_diamrlm =
+                                    ogs_yaml_iter_value(&fd_iter);
+                            } else if (!strcmp(fd_key, "port")) {
+                                const char *v = ogs_yaml_iter_value(&fd_iter);
+                                if (v) self.diam_config->cnf_port = atoi(v);
+                            } else if (!strcmp(fd_key, "sec_port")) {
+                                const char *v = ogs_yaml_iter_value(&fd_iter);
+                                if (v) self.diam_config->cnf_port_tls = atoi(v);
+                            } else if (!strcmp(fd_key, "listen_on")) {
+                                self.diam_config->cnf_addr =
+                                    ogs_yaml_iter_value(&fd_iter);
+                            } else if (!strcmp(fd_key, "no_fwd")) {
+                                self.diam_config->cnf_flags.no_fwd =
+                                    ogs_yaml_iter_bool(&fd_iter);
+                            } else if (!strcmp(fd_key, "load_extension")) {
+                                ogs_yaml_iter_t ext_array, ext_iter;
+                                ogs_yaml_iter_recurse(&fd_iter, &ext_array);
+                                do {
+                                    const char *module = NULL;
+                                    const char *conf = NULL;
+
+                                    if (ogs_yaml_iter_type(&ext_array) ==
+                                        YAML_MAPPING_NODE) {
+                                        memcpy(&ext_iter, &ext_array,
+                                                sizeof(ogs_yaml_iter_t));
+                                    } else if (ogs_yaml_iter_type(&ext_array) ==
+                                        YAML_SEQUENCE_NODE) {
+                                        if (!ogs_yaml_iter_next(&ext_array))
+                                            break;
+                                        ogs_yaml_iter_recurse(
+                                                &ext_array, &ext_iter);
+                                    } else if (ogs_yaml_iter_type(&ext_array) ==
+                                        YAML_SCALAR_NODE) {
+                                        break;
+                                    } else
+                                        ogs_assert_if_reached();
+
+                                    while (ogs_yaml_iter_next(&ext_iter)) {
+                                        const char *ext_key =
+                                            ogs_yaml_iter_key(&ext_iter);
+                                        ogs_assert(ext_key);
+                                        if (!strcmp(ext_key, "module")) {
+                                            module = ogs_yaml_iter_value(
+                                                    &ext_iter);
+                                        } else if (!strcmp(ext_key, "conf")) {
+                                            conf = ogs_yaml_iter_value(
+                                                    &ext_iter);
+                                        } else
+                                            ogs_warn("unknown key `%s`",
+                                                    ext_key);
+                                    }
+
+                                    if (module) {
+                                        self.diam_config->
+                                            ext[self.diam_config->num_of_ext].
+                                                module = module;
+                                        self.diam_config->
+                                            ext[self.diam_config->num_of_ext].
+                                                conf = conf;
+                                        self.diam_config->num_of_ext++;
+                                    }
+                                } while (ogs_yaml_iter_type(&ext_array) ==
+                                        YAML_SEQUENCE_NODE);
+                            } else if (!strcmp(fd_key, "connect")) {
+                                ogs_yaml_iter_t conn_array, conn_iter;
+                                ogs_yaml_iter_recurse(&fd_iter, &conn_array);
+                                do {
+                                    const char *identity = NULL;
+                                    const char *addr = NULL;
+                                    uint16_t port = 0;
+                                    int tc_timer = 0;
+
+                                    if (ogs_yaml_iter_type(&conn_array) ==
+                                        YAML_MAPPING_NODE) {
+                                        memcpy(&conn_iter, &conn_array,
+                                                sizeof(ogs_yaml_iter_t));
+                                    } else if (ogs_yaml_iter_type(
+                                        &conn_array) == YAML_SEQUENCE_NODE) {
+                                        if (!ogs_yaml_iter_next(&conn_array))
+                                            break;
+                                        ogs_yaml_iter_recurse(&conn_array,
+                                                &conn_iter);
+                                    } else if (ogs_yaml_iter_type(
+                                            &conn_array) == YAML_SCALAR_NODE) {
+                                        break;
+                                    } else
+                                        ogs_assert_if_reached();
+
+                                    while (ogs_yaml_iter_next(&conn_iter)) {
+                                        const char *conn_key =
+                                            ogs_yaml_iter_key(&conn_iter);
+                                        ogs_assert(conn_key);
+                                        if (!strcmp(conn_key, "identity")) {
+                                            identity =
+                                                ogs_yaml_iter_value(&conn_iter);
+                                        } else if (!strcmp(conn_key,
+                                                    "address")) {
+                                            addr =
+                                                ogs_yaml_iter_value(&conn_iter);
+                                        } else if (!strcmp(conn_key, "port")) {
+                                            const char *v =
+                                                ogs_yaml_iter_value(&conn_iter);
+                                            if (v) port = atoi(v);
+                                        } else if (!strcmp(conn_key, "tc_timer")) {
+                                            const char *v =
+                                                ogs_yaml_iter_value(&conn_iter);
+                                            if (v) tc_timer = atoi(v);
+                                        } else
+                                            ogs_warn("unknown key `%s`",
+                                                    conn_key);
+                                    }
+
+                                    if (identity && addr) {
+                                        self.diam_config->
+                                            conn[self.diam_config->num_of_conn].
+                                                identity = identity;
+                                        self.diam_config->
+                                            conn[self.diam_config->num_of_conn].
+                                                addr = addr;
+                                        self.diam_config->
+                                            conn[self.diam_config->num_of_conn].
+                                                port = port;
+                                        self.diam_config->
+                                            conn[self.diam_config->num_of_conn].
+                                                tc_timer = tc_timer;
+                                        self.diam_config->num_of_conn++;
+                                    }
+                                } while (ogs_yaml_iter_type(&conn_array) ==
+                                        YAML_SEQUENCE_NODE);
+                            } else if (!strcmp(fd_key, "tc_timer")) {
+                                const char *v = ogs_yaml_iter_value(&fd_iter);
+                                if (v) self.diam_config->cnf_timer_tc = atoi(v);
+                            } else
+                                ogs_warn("unknown key `%s`", fd_key);
                         }
                     }
-                }
+                } else if (!strcmp(smf_key, "ctf")) {
+                    ogs_yaml_iter_t ctf_iter;
+                    yaml_node_t *node =
+                        yaml_document_get_node(document, smf_iter.pair->value);
+                    ogs_assert(node);
+                    ogs_assert(node->type == YAML_MAPPING_NODE);
+                    ogs_yaml_iter_recurse(&smf_iter, &ctf_iter);
+                    while (ogs_yaml_iter_next(&ctf_iter)) {
+                        const char *ctf_key = ogs_yaml_iter_key(&ctf_iter);
+                        ogs_assert(ctf_key);
+                        if (!strcmp(ctf_key, "enabled")) {
+                            yaml_node_t *ctf_node = yaml_document_get_node(
+                                    document, ctf_iter.pair->value);
+                            ogs_assert(ctf_node->type == YAML_SCALAR_NODE);
+                            const char* enabled =
+                                ogs_yaml_iter_value(&ctf_iter);
+                            if (!strcmp(enabled, "auto"))
+                                self.ctf_config.enabled = SMF_CTF_ENABLED_AUTO;
+                            else if (!strcmp(enabled, "yes"))
+                                self.ctf_config.enabled = SMF_CTF_ENABLED_YES;
+                            else if (!strcmp(enabled, "no"))
+                                self.ctf_config.enabled = SMF_CTF_ENABLED_NO;
+                            else
+                                ogs_warn("unknown 'enabled' value `%s`",
+                                        enabled);
+                        } else
+                            ogs_warn("unknown key `%s`", ctf_key);
+                    }
+                } else if (!strcmp(smf_key, "gtpc")) {
+                    /* handle config in gtp library */
+                } else if (!strcmp(smf_key, "gtpu")) {
+                    /* handle config in gtp library */
+                } else if (!strcmp(smf_key, "dns")) {
+                    ogs_yaml_iter_t dns_iter;
+                    ogs_yaml_iter_recurse(&smf_iter, &dns_iter);
+                    ogs_assert(ogs_yaml_iter_type(&dns_iter) !=
+                        YAML_MAPPING_NODE);
+
+                    do {
+                        const char *v = NULL;
+
+                        if (ogs_yaml_iter_type(&dns_iter) ==
+                                YAML_SEQUENCE_NODE) {
+                            if (!ogs_yaml_iter_next(&dns_iter))
+                                break;
+                        }
+
+                        v = ogs_yaml_iter_value(&dns_iter);
+                        if (v && strlen(v)) {
+                            ogs_ipsubnet_t ipsub;
+                            rv = ogs_ipsubnet(&ipsub, v, NULL);
+                            ogs_assert(rv == OGS_OK);
+
+                            if (ipsub.family == AF_INET) {
+                                if (self.dns[0] && self.dns[1])
+                                    ogs_warn("Ignore DNS : %s", v);
+                                else if (self.dns[0]) self.dns[1] = v;
+                                else self.dns[0] = v;
+                            }
+                            else if (ipsub.family == AF_INET6) {
+                                if (self.dns6[0] && self.dns6[1])
+                                    ogs_warn("Ignore DNS : %s", v);
+                                else if (self.dns6[0]) self.dns6[1] = v;
+                                else self.dns6[0] = v;
+                            } else
+                                ogs_warn("Ignore DNS : %s", v);
+                        }
+
+                    } while (ogs_yaml_iter_type(&dns_iter) ==
+                                YAML_SEQUENCE_NODE);
+                } else if (!strcmp(smf_key, "mtu")) {
+                    ogs_assert(ogs_yaml_iter_type(&smf_iter) !=
+                            YAML_SCALAR_NODE);
+                    self.mtu = atoi(ogs_yaml_iter_value(&smf_iter));
+                    ogs_assert(self.mtu);
+                } else if (!strcmp(smf_key, "p-cscf")) {
+                    ogs_yaml_iter_t p_cscf_iter;
+                    ogs_yaml_iter_recurse(&smf_iter, &p_cscf_iter);
+                    ogs_assert(ogs_yaml_iter_type(&p_cscf_iter) !=
+                        YAML_MAPPING_NODE);
+
+                    self.num_of_p_cscf = 0;
+                    self.num_of_p_cscf6 = 0;
+                    do {
+                        const char *v = NULL;
+
+                        if (ogs_yaml_iter_type(&p_cscf_iter) ==
+                                YAML_SEQUENCE_NODE) {
+                            if (!ogs_yaml_iter_next(&p_cscf_iter))
+                                break;
+                        }
+
+                        v = ogs_yaml_iter_value(&p_cscf_iter);
+                        if (v) {
+                            ogs_ipsubnet_t ipsub;
+                            rv = ogs_ipsubnet(&ipsub, v, NULL);
+                            ogs_assert(rv == OGS_OK);
+
+                            if (ipsub.family == AF_INET) {
+                                if (self.num_of_p_cscf >= MAX_NUM_OF_P_CSCF)
+                                    ogs_warn("Ignore P-CSCF : %s", v);
+                                else self.p_cscf[self.num_of_p_cscf++] = v;
+                            }
+                            else if (ipsub.family == AF_INET6) {
+                                if (self.num_of_p_cscf6 >= MAX_NUM_OF_P_CSCF)
+                                    ogs_warn("Ignore P-CSCF : %s", v);
+                                else self.p_cscf6[self.num_of_p_cscf6++] = v;
+                            } else
+                                ogs_warn("Ignore P-CSCF : %s", v);
+                        }
+
+                    } while (ogs_yaml_iter_type(&p_cscf_iter) ==
+                                YAML_SEQUENCE_NODE);
+                } else if (!strcmp(smf_key, "info")) {
+                    ogs_sbi_nf_instance_t *nf_instance = NULL;
+
+                    ogs_yaml_iter_t info_array, info_iter;
+                    ogs_yaml_iter_recurse(&smf_iter, &info_array);
+
+                    nf_instance = ogs_sbi_self()->nf_instance;
+                    ogs_assert(nf_instance);
+
+                    do {
+                        ogs_sbi_nf_info_t *nf_info = NULL;
+                        ogs_sbi_smf_info_t *smf_info = NULL;
+
+                        if (ogs_yaml_iter_type(&info_array) ==
+                                YAML_MAPPING_NODE) {
+                            memcpy(&info_iter, &info_array,
+                                    sizeof(ogs_yaml_iter_t));
+                        } else if (ogs_yaml_iter_type(&info_array) ==
+                                    YAML_SEQUENCE_NODE) {
+                            if (!ogs_yaml_iter_next(&info_array))
+                                break;
+                            ogs_yaml_iter_recurse(&info_array, &info_iter);
+                        } else if (ogs_yaml_iter_type(&info_array) ==
+                                    YAML_SCALAR_NODE) {
+                            break;
+                        } else
+                            ogs_assert_if_reached();
+
+                        nf_info = ogs_sbi_nf_info_add(
+                                    &nf_instance->nf_info_list,
+                                        OpenAPI_nf_type_SMF);
+                        ogs_assert(nf_info);
+
+                        smf_info = &nf_info->smf;
+                        ogs_assert(smf_info);
+
+                        while (ogs_yaml_iter_next(&info_iter)) {
+                            const char *info_key =
+                                ogs_yaml_iter_key(&info_iter);
+                            ogs_assert(info_key);
+                            if (!strcmp(info_key, "s_nssai")) {
+                                int num_of_slice = 0;
+
+                                ogs_yaml_iter_t s_nssai_array, s_nssai_iter;
+                                ogs_yaml_iter_recurse(&info_iter,
+                                        &s_nssai_array);
+                                do {
+                                    ogs_s_nssai_t *s_nssai = NULL;
+                                    const char *sst = NULL, *sd = NULL;
+                                    int num_of_dnn = 0;
+                                    const char *dnn[OGS_MAX_NUM_OF_DNN];
+
+                                    ogs_assert(num_of_slice <
+                                            OGS_MAX_NUM_OF_SLICE);
+                                    s_nssai = &smf_info->slice[num_of_slice].
+                                            s_nssai;
+                                    ogs_assert(s_nssai);
+
+                                    if (ogs_yaml_iter_type(&s_nssai_array) ==
+                                            YAML_MAPPING_NODE) {
+                                        memcpy(&s_nssai_iter, &s_nssai_array,
+                                                sizeof(ogs_yaml_iter_t));
+                                    } else if (ogs_yaml_iter_type(
+                                                &s_nssai_array) ==
+                                                YAML_SEQUENCE_NODE) {
+                                        if (!ogs_yaml_iter_next(&s_nssai_array))
+                                            break;
+                                        ogs_yaml_iter_recurse(&s_nssai_array,
+                                                &s_nssai_iter);
+                                    } else if (ogs_yaml_iter_type(
+                                                &s_nssai_array) ==
+                                                    YAML_SCALAR_NODE) {
+                                        break;
+                                    } else
+                                        ogs_assert_if_reached();
+
+                                    while (ogs_yaml_iter_next(&s_nssai_iter)) {
+                                        const char *s_nssai_key =
+                                            ogs_yaml_iter_key(&s_nssai_iter);
+                                        ogs_assert(s_nssai_key);
+                                        if (!strcmp(s_nssai_key, "sst")) {
+                                            sst = ogs_yaml_iter_value(
+                                                    &s_nssai_iter);
+                                        } else if (!strcmp(s_nssai_key, "sd")) {
+                                            sd = ogs_yaml_iter_value(
+                                                    &s_nssai_iter);
+                                        } else if (!strcmp(s_nssai_key,
+                                                    "dnn")) {
+                                            ogs_yaml_iter_t dnn_iter;
+                                            ogs_yaml_iter_recurse(&s_nssai_iter,
+                                                    &dnn_iter);
+                                            ogs_assert(ogs_yaml_iter_type(
+                                                        &dnn_iter) !=
+                                                        YAML_MAPPING_NODE);
+
+                                            do {
+                                                const char *v = NULL;
+
+                                                if (ogs_yaml_iter_type(
+                                                        &dnn_iter) ==
+                                                        YAML_SEQUENCE_NODE) {
+                                                    if (!ogs_yaml_iter_next(
+                                                                &dnn_iter))
+                                                        break;
+                                                }
+
+                                                v = ogs_yaml_iter_value(
+                                                        &dnn_iter);
+                                                if (v) {
+                                                    ogs_assert(num_of_dnn <
+                                                            OGS_MAX_NUM_OF_DNN);
+                                                    dnn[num_of_dnn++] = v;
+                                                }
+                                            } while (ogs_yaml_iter_type(
+                                                        &dnn_iter) ==
+                                                        YAML_SEQUENCE_NODE);
+                                        }
+                                    }
+
+                                    if (sst) {
+                                        int i;
+
+                                        s_nssai->sst = atoi(sst);
+                                        if (sd)
+                                            s_nssai->sd =
+                                                ogs_uint24_from_string_hexadecimal(
+                                                        (char*)sd);
+                                        else
+                                            s_nssai->sd.v =
+                                                OGS_S_NSSAI_NO_SD_VALUE;
+
+                                        ogs_assert(num_of_dnn <
+                                                OGS_MAX_NUM_OF_DNN);
+
+                                        for (i = 0; i < num_of_dnn; i++) {
+                                            smf_info->slice[num_of_slice].
+                                                dnn[i] = ogs_strdup(dnn[i]);
+                                            ogs_assert(
+                                                smf_info->slice[num_of_slice].
+                                                    dnn[i]);
+                                        }
+
+                                        smf_info->slice[num_of_slice].
+                                            num_of_dnn = num_of_dnn;
+
+                                        num_of_slice++;
+                                    }
+                                } while (ogs_yaml_iter_type(&s_nssai_array) ==
+                                        YAML_SEQUENCE_NODE);
+
+                                smf_info->num_of_slice = num_of_slice;
+
+                            } else if (!strcmp(info_key, "tai")) {
+                                int num_of_nr_tai = 0;
+                                int num_of_nr_tai_range = 0;
+
+                                ogs_yaml_iter_t tai_array, tai_iter;
+                                ogs_yaml_iter_recurse(&info_iter, &tai_array);
+                                do {
+                                    const char *mcc = NULL, *mnc = NULL;
+                                    int num_of_tac = 0;
+                                    ogs_uint24_t start[OGS_MAX_NUM_OF_TAI];
+                                    ogs_uint24_t end[OGS_MAX_NUM_OF_TAI];
+
+                                    if (ogs_yaml_iter_type(&tai_array) ==
+                                            YAML_MAPPING_NODE) {
+                                        memcpy(&tai_iter, &tai_array,
+                                                sizeof(ogs_yaml_iter_t));
+                                    } else if (ogs_yaml_iter_type(&tai_array) ==
+                                            YAML_SEQUENCE_NODE) {
+                                        if (!ogs_yaml_iter_next(&tai_array))
+                                            break;
+                                        ogs_yaml_iter_recurse(&tai_array,
+                                                &tai_iter);
+                                    } else if (ogs_yaml_iter_type(&tai_array) ==
+                                            YAML_SCALAR_NODE) {
+                                        break;
+                                    } else
+                                        ogs_assert_if_reached();
+
+                                    while (ogs_yaml_iter_next(&tai_iter)) {
+                                        const char *tai_key =
+                                            ogs_yaml_iter_key(&tai_iter);
+                                        ogs_assert(tai_key);
+                                        if (!strcmp(tai_key, "plmn_id")) {
+                                            ogs_yaml_iter_t plmn_id_iter;
+
+                                            ogs_yaml_iter_recurse(
+                                                    &tai_iter, &plmn_id_iter);
+                                            while (ogs_yaml_iter_next(
+                                                        &plmn_id_iter)) {
+                                                const char *plmn_id_key =
+                                                    ogs_yaml_iter_key(
+                                                            &plmn_id_iter);
+                                                ogs_assert(plmn_id_key);
+                                                if (!strcmp(plmn_id_key,
+                                                            "mcc")) {
+                                                    mcc = ogs_yaml_iter_value(
+                                                            &plmn_id_iter);
+                                                } else if (!strcmp(plmn_id_key,
+                                                            "mnc")) {
+                                                    mnc = ogs_yaml_iter_value(
+                                                            &plmn_id_iter);
+                                                }
+                                            }
+                                        } else if (!strcmp(tai_key, "tac")) {
+                                            ogs_yaml_iter_t tac_iter;
+                                            ogs_yaml_iter_recurse(&tai_iter,
+                                                    &tac_iter);
+                                            ogs_assert(ogs_yaml_iter_type(
+                                                    &tac_iter) !=
+                                                        YAML_MAPPING_NODE);
+                                            do {
+                                                char *v = NULL;
+                                                char *low = NULL, *high = NULL;
+
+                                                if (ogs_yaml_iter_type(
+                                                        &tac_iter) ==
+                                                        YAML_SEQUENCE_NODE) {
+                                                    if (!ogs_yaml_iter_next(
+                                                                &tac_iter))
+                                                        break;
+                                                }
+
+                                                v = (char *)ogs_yaml_iter_value(
+                                                            &tac_iter);
+                                                if (v) {
+                                                    low = strsep(&v, "-");
+                                                    if (low && strlen(low) == 0)
+                                                        low = NULL;
+
+                                                    high = v;
+                                                    if (high &&
+                                                            strlen(high) == 0)
+                                                        high = NULL;
+
+                                                    if (low) {
+                                                        ogs_assert(num_of_tac <
+                                                            OGS_MAX_NUM_OF_TAI);
+                                                        start[num_of_tac].v =
+                                                            atoi(low);
+                                                        if (high) {
+                                                            end[num_of_tac].v =
+                                                                atoi(high);
+                                                            if (end[num_of_tac].
+                                                                    v <
+                                                                start[
+                                                                    num_of_tac].
+                                                                    v)
+                                                                ogs_error(
+                                                                "Invalid TAI "
+                                                                "range: LOW:%s,"
+                                                                "HIGH:%s",
+                                                                    low, high);
+                                                            else
+                                                                num_of_tac++;
+                                                        } else {
+                                                            end[num_of_tac].v =
+                                                                start[
+                                                                num_of_tac].v;
+                                                            num_of_tac++;
+                                                        }
+                                                    }
+                                                }
+                                            } while (
+                                                ogs_yaml_iter_type(&tac_iter) ==
+                                                    YAML_SEQUENCE_NODE);
+
+                                        } else
+                                            ogs_warn("unknown key `%s`",
+                                                    tai_key);
+                                    }
+
+                                    if (mcc && mnc && num_of_tac) {
+                                        int tac, num_of_tac_range = 0;
+                                        for (tac = 0; tac < num_of_tac; tac++) {
+                                            ogs_assert(end[tac].v >=
+                                                    start[tac].v);
+                                            if (start[tac].v == end[tac].v) {
+                                                ogs_assert(num_of_nr_tai <
+                                                        OGS_MAX_NUM_OF_TAI);
+                                                ogs_plmn_id_build(
+                                                    &smf_info->nr_tai[
+                                                        num_of_nr_tai].plmn_id,
+                                                    atoi(mcc), atoi(mnc),
+                                                    strlen(mnc));
+                                                smf_info->nr_tai[num_of_nr_tai].
+                                                    tac.v = start[tac].v;
+                                                num_of_nr_tai++;
+                                            } else if (start[tac].v <
+                                                    end[tac].v) {
+                                                ogs_assert(num_of_nr_tai_range <
+                                                        OGS_MAX_NUM_OF_TAI);
+                                                ogs_assert(num_of_tac_range <
+                                                        OGS_MAX_NUM_OF_TAI);
+                                                smf_info->nr_tai_range[
+                                                    num_of_nr_tai_range].
+                                                    start[num_of_tac_range].v =
+                                                        start[tac].v;
+                                                smf_info->nr_tai_range[
+                                                    num_of_nr_tai_range].
+                                                    end[num_of_tac_range].v =
+                                                    end[tac].v;
+                                                num_of_tac_range++;
+                                            }
+                                        }
+                                        if (num_of_tac_range) {
+                                            ogs_plmn_id_build(
+                                                &smf_info->nr_tai_range[
+                                                num_of_nr_tai_range].plmn_id,
+                                                atoi(mcc), atoi(mnc),
+                                                strlen(mnc));
+                                            smf_info->nr_tai_range[
+                                                num_of_nr_tai_range].
+                                                num_of_tac_range =
+                                                num_of_tac_range;
+                                            num_of_nr_tai_range++;
+                                        }
+                                    } else {
+                                        ogs_warn("Ignore tai : mcc(%p), "
+                                                "mnc(%p), num_of_tac(%d)",
+                                                mcc, mnc, num_of_tac);
+                                    }
+                                } while (ogs_yaml_iter_type(&tai_array) ==
+                                        YAML_SEQUENCE_NODE);
+
+                                smf_info->num_of_nr_tai = num_of_nr_tai;
+                                smf_info->num_of_nr_tai_range =
+                                    num_of_nr_tai_range;
+                            } else
+                                ogs_warn("unknown key `%s`", info_key);
+                        }
+                    } while (ogs_yaml_iter_type(&info_array) ==
+                            YAML_SEQUENCE_NODE);
+
+                } else if (!strcmp(smf_key, "security_indication")) {
+                    ogs_yaml_iter_t security_indication_iter;
+                    ogs_yaml_iter_recurse(
+                            &smf_iter, &security_indication_iter);
+                    while (ogs_yaml_iter_next(&security_indication_iter)) {
+                        const char *security_indication_key =
+                            ogs_yaml_iter_key(&security_indication_iter);
+                        ogs_assert(security_indication_key);
+                        if (!strcmp(security_indication_key,
+                            "integrity_protection_indication")) {
+                            self.security_indication.
+                                integrity_protection_indication =
+                                    ogs_yaml_iter_value(
+                                        &security_indication_iter);
+                        } else if (!strcmp(security_indication_key,
+                            "confidentiality_protection_indication")) {
+                            self.security_indication.
+                                confidentiality_protection_indication =
+                                    ogs_yaml_iter_value(
+                                            &security_indication_iter);
+                        } else if (!strcmp(security_indication_key,
+                            "maximum_integrity_protected_data_rate_uplink")) {
+                            self.security_indication.
+                                maximum_integrity_protected_data_rate_uplink =
+                                    ogs_yaml_iter_value(
+                                            &security_indication_iter);
+                        } else if (!strcmp(security_indication_key,
+                            "maximum_integrity_protected_data_rate_downlink")) {
+                            self.security_indication.
+                                maximum_integrity_protected_data_rate_downlink =
+                                    ogs_yaml_iter_value(
+                                            &security_indication_iter);
+                        }
+                    }
+                } else if (!strcmp(smf_key, "pfcp")) {
+                    /* handle config in pfcp library */
+                } else if (!strcmp(smf_key, "upf")) {
+                    /* handle config in pfcp library */
+                } else if (!strcmp(smf_key, "session")) {
+                    /* handle config in pfcp library */
+                } else if (!strcmp(smf_key, "default")) {
+                    /* handle config in sbi library */
+                } else if (!strcmp(smf_key, "sbi")) {
+                    /* handle config in sbi library */
+                } else if (!strcmp(smf_key, "nrf")) {
+                    /* handle config in sbi library */
+                } else if (!strcmp(smf_key, "scp")) {
+                    /* handle config in sbi library */
+                } else if (!strcmp(smf_key, "service_name")) {
+                    /* handle config in sbi library */
+                } else if (!strcmp(smf_key, "discovery")) {
+                    /* handle config in sbi library */
+                } else if (!strcmp(smf_key, "metrics")) {
+                    /* handle config in metrics library */
+                } else
+                    ogs_warn("unknown key `%s`", smf_key);
             }
         }
     }
+
+    rv = smf_context_validation();
+    if (rv != OGS_OK) return rv;
 
     return OGS_OK;
 }

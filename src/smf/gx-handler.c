@@ -36,10 +36,12 @@ uint32_t smf_gx_handle_cca_initial_request(
     ogs_pfcp_pdr_t *dl_pdr = NULL;
     ogs_pfcp_pdr_t *ul_pdr = NULL;
     ogs_pfcp_far_t *dl_far = NULL;
-    ogs_pfcp_qer_t *qer = NULL;
-    //ogs_pfcp_pdr_t *cp2up_pdr = NULL;
-    //ogs_pfcp_pdr_t *up2cp_pdr = NULL;
+    //ogs_pfcp_qer_t *qer = NULL;
     ogs_pfcp_far_t *up2cp_far = NULL;
+    ogs_pfcp_pdr_t *cp2up_pdr = NULL;
+    ogs_pfcp_pdr_t *up2cp_pdr = NULL;
+
+
     bool is_ims_apn = false;
 
     struct {
@@ -53,8 +55,8 @@ uint32_t smf_gx_handle_cca_initial_request(
     ogs_assert(gx_message);
     ogs_assert(gtp_xact);
 
-    ogs_debug("[PGW] Create Session Response");
-    ogs_debug("    SGW_S5C_TEID[0x%x] PGW_S5C_TEID[0x%x]",
+    ogs_info("[PGW] Create Session Response");
+    ogs_info("    SGW_S5C_TEID[0x%x] PGW_S5C_TEID[0x%x]",
             sess->sgw_s5c_teid, sess->smf_n4_teid);
 
     /* Check if this is IMS APN */
@@ -66,6 +68,7 @@ uint32_t smf_gx_handle_cca_initial_request(
     /* For non-IMS APNs, verify rating groups */
     if (!is_ims_apn) {
         if (gx_message->result_code != ER_DIAMETER_SUCCESS) {
+            ogs_error("Gx CCA-I failed with result code %d", gx_message->result_code);
             return gx_message->err ? *gx_message->err :
                                    ER_DIAMETER_AUTHENTICATION_REJECTED;
         }
@@ -94,20 +97,16 @@ uint32_t smf_gx_handle_cca_initial_request(
             }
         }
 
-        /* Check if we have any rating groups */
-        if (num_rating_groups == 0) {
-            ogs_error("No rating groups in Gx response for APN [%s]",
-                     sess->session.name ? sess->session.name : "unknown");
-            return ER_DIAMETER_AUTHORIZATION_REJECTED;
-        }
-
         /* Create URRs for each unique rating group */
         for (i = 0; i < num_rating_groups; i++) {
             ogs_pfcp_urr_t *urr = NULL;
 
             /* Create new URR for this rating group */
             urr = ogs_pfcp_urr_add(&sess->pfcp);
-            ogs_assert(urr);
+            if (!urr) {
+                ogs_error("Failed to create URR");
+                return ER_DIAMETER_UNABLE_TO_COMPLY;
+            }
 
             /* Store URR reference */
             rating_groups[i].urr = urr;
@@ -116,11 +115,11 @@ uint32_t smf_gx_handle_cca_initial_request(
             urr->meas_method = OGS_PFCP_MEASUREMENT_METHOD_VOLUME |
                               OGS_PFCP_MEASUREMENT_METHOD_DURATION;
 
-            /* Configure volume thresholds */
+            /* Configure volume thresholds based on PCC rules */
             urr->vol_threshold.flags = OGS_PFCP_VOLUME_MEASUREMENT_TYPE;
-            urr->vol_threshold.total_volume = 100 * 1024 * 1024;  /* 100 MB */
-            urr->vol_threshold.downlink_volume = 100 * 1024 * 1024;     /* 100 MB */
-            urr->vol_threshold.uplink_volume = 100 * 1024 * 1024;     /* 100 MB */
+            urr->vol_threshold.total_volume = 0;  /* Will be set by PCC rules */
+            urr->vol_threshold.downlink_volume = 0;  /* Will be set by PCC rules */
+            urr->vol_threshold.uplink_volume = 0;  /* Will be set by PCC rules */
 
             /* Configure time threshold */
             urr->time_threshold = 3600;  /* 1 hour in seconds */
@@ -129,14 +128,10 @@ uint32_t smf_gx_handle_cca_initial_request(
             urr->rep_triggers.volume_threshold = 1;
             urr->rep_triggers.time_threshold = 1;
 
-            /* Set measurement method */
-            //urr->meas_info.vol_meas = 1;
-            //urr->meas_info.dur_meas = 1;
-
             /* Store rating group in URR context */
             urr->id = rating_groups[i].rating_group;
 
-            ogs_error("    Created URR[%d] for Rating Group[%d] with %d rules",
+            ogs_info("    Created URR[%d] for Rating Group[%d] with %d rules",
                      urr->id, rating_groups[i].rating_group,
                      rating_groups[i].num_rules);
         }
@@ -147,221 +142,60 @@ uint32_t smf_gx_handle_cca_initial_request(
     for (i = 0; i < gx_message->session_data.num_of_pcc_rule; i++) {
         OGS_STORE_PCC_RULE(&sess->policy.pcc_rule[i],
                 &gx_message->session_data.pcc_rule[i]);
-    }
 
-    /* Handle APN-AMBR updates */
-    sess->gtp.create_session_response_apn_ambr = false;
-    if ((gx_message->session_data.session.ambr.uplink &&
-            (sess->session.ambr.uplink / 1000) !=
-                (gx_message->session_data.session.ambr.uplink / 1000)) ||
-        (gx_message->session_data.session.ambr.downlink &&
-            (sess->session.ambr.downlink / 1000) !=
-                (gx_message->session_data.session.ambr.downlink / 1000))) {
+        /* Debug log for PCC rule details */
+        ogs_debug("PCC Rule[%d] Details:", i);
+        ogs_debug("  - Name: %s", gx_message->session_data.pcc_rule[i].name);
+        ogs_debug("  - Rating Group: %d", gx_message->session_data.pcc_rule[i].rating_group);
+        ogs_debug("  - Flow Status: %d", gx_message->session_data.pcc_rule[i].flow_status);
 
-        sess->session.ambr.downlink =
-            gx_message->session_data.session.ambr.downlink;
-        sess->session.ambr.uplink =
-            gx_message->session_data.session.ambr.uplink;
+        /* Log flow information */
+        if (gx_message->session_data.pcc_rule[i].num_of_flow > OGS_MAX_NUM_OF_FLOW) {
+            ogs_error("Too many flows in PCC rule");
+            return ER_DIAMETER_UNABLE_TO_COMPLY;
+        }
 
-        sess->gtp.create_session_response_apn_ambr = true;
-    }
-
-    /* Handle Bearer QoS updates */
-    sess->gtp.create_session_response_bearer_qos = false;
-    if ((gx_message->session_data.session.qos.index &&
-        sess->session.qos.index !=
-            gx_message->session_data.session.qos.index) ||
-        (gx_message->session_data.session.qos.arp.priority_level &&
-        sess->session.qos.arp.priority_level !=
-            gx_message->session_data.session.qos.arp.priority_level) ||
-        sess->session.qos.arp.pre_emption_capability !=
-            gx_message->session_data.session.qos.arp.pre_emption_capability ||
-        sess->session.qos.arp.pre_emption_vulnerability !=
-            gx_message->session_data.session.qos.arp.pre_emption_vulnerability) {
-
-        sess->session.qos.index = gx_message->session_data.session.qos.index;
-        sess->session.qos.arp.priority_level =
-            gx_message->session_data.session.qos.arp.priority_level;
-        sess->session.qos.arp.pre_emption_capability =
-            gx_message->session_data.session.qos.arp.pre_emption_capability;
-        sess->session.qos.arp.pre_emption_vulnerability =
-            gx_message->session_data.session.qos.arp.pre_emption_vulnerability;
-
-        sess->gtp.create_session_response_bearer_qos = true;
+        if (gx_message->session_data.pcc_rule[i].num_of_flow) {
+            int j;
+            for (j = 0; j < gx_message->session_data.pcc_rule[i].num_of_flow; j++) {
+                ogs_info("  - Flow[%d]: %s (dir:%d)",
+                    j,
+                    gx_message->session_data.pcc_rule[i].flow[j].description,
+                    gx_message->session_data.pcc_rule[i].flow[j].direction);
+            }
+        }
     }
 
     /* Get default bearer */
     bearer = smf_default_bearer_in_sess(sess);
     ogs_assert(bearer);
 
-    /* Create CP/UP data forwarding */
-    smf_sess_create_cp_up_data_forwarding(sess);
-
-    /* Setup QER if AMBR is present */
-    if (sess->session.ambr.downlink || sess->session.ambr.uplink) {
-        qer = bearer->qer;
-        if (!qer) {
-            qer = ogs_pfcp_qer_add(&sess->pfcp);
-            ogs_assert(qer);
-            bearer->qer = qer;
-        }
-
-        qer->mbr.uplink = sess->session.ambr.uplink;
-        qer->mbr.downlink = sess->session.ambr.downlink;
-    }
-
-    /* Setup FAR */
-    dl_far = bearer->dl_far;
-    ogs_assert(dl_far);
-    up2cp_far = sess->up2cp_far;
-    ogs_assert(up2cp_far);
-
-    dl_far->apply_action = OGS_PFCP_APPLY_ACTION_FORW;
-
-    /* Setup PDRs */
+    /* Initialize PDRs and FARs from bearer */
     dl_pdr = bearer->dl_pdr;
-    ogs_assert(dl_pdr);
     ul_pdr = bearer->ul_pdr;
+    dl_far = bearer->dl_far;
+    up2cp_far = sess->up2cp_far;
+    //qer = bearer->qer;
+
+    ogs_assert(dl_pdr);
     ogs_assert(ul_pdr);
 
-    /* Associate URRs with PDRs for non-IMS APNs */
-    if (!is_ims_apn) {
-        for (i = 0; i < num_rating_groups; i++) {
-            ogs_pfcp_urr_t *urr = rating_groups[i].urr;
-            if (urr) {
-                ogs_pfcp_pdr_associate_urr(dl_pdr, urr);
-                ogs_pfcp_pdr_associate_urr(ul_pdr, urr);
-                ogs_error("    Associated URR[%d] with PDRs for Rating Group[%d]",
-                         urr->id, rating_groups[i].rating_group);
-            }
-        }
-    }
-
-    /* Continue with existing PDR/FAR setup */
-    dl_pdr->precedence = OGS_PFCP_DEFAULT_PDR_PRECEDENCE;
-    ul_pdr->precedence = OGS_PFCP_DEFAULT_PDR_PRECEDENCE;
-
-    /* Associate QER with PDRs */
-    if (qer) {
-        ogs_pfcp_pdr_associate_qer(dl_pdr, qer);
-        ogs_pfcp_pdr_associate_qer(ul_pdr, qer);
-    }
-
-    return ER_DIAMETER_SUCCESS;
-}
-
-uint32_t smf_gx_handle_cca_initial_request_old(
-        smf_sess_t *sess, ogs_diam_gx_message_t *gx_message,
-        ogs_gtp_xact_t *gtp_xact)
-{
-    int i;
-
-    smf_bearer_t *bearer = NULL;
-
-    ogs_pfcp_pdr_t *dl_pdr = NULL;
-    ogs_pfcp_pdr_t *ul_pdr = NULL;
-    ogs_pfcp_far_t *dl_far = NULL;
-    ogs_pfcp_qer_t *qer = NULL;
-
-    ogs_pfcp_pdr_t *cp2up_pdr = NULL;
-    ogs_pfcp_pdr_t *up2cp_pdr = NULL;
-    ogs_pfcp_far_t *up2cp_far = NULL;
-
-    ogs_assert(sess);
-    ogs_assert(gx_message);
-    ogs_assert(gtp_xact);
-
-    ogs_error("[PGW] Create Session Response");
-    ogs_error("    SGW_S5C_TEID[0x%x] PGW_S5C_TEID[0x%x]",
-            sess->sgw_s5c_teid, sess->smf_n4_teid);
-
-    if (gx_message->result_code != ER_DIAMETER_SUCCESS)
-        return gx_message->err ? *gx_message->err :
-                                 ER_DIAMETER_AUTHENTICATION_REJECTED;
-
-
-    sess->policy.num_of_pcc_rule = gx_message->session_data.num_of_pcc_rule;
-    for (i = 0; i < gx_message->session_data.num_of_pcc_rule; i++) {
-        OGS_STORE_PCC_RULE(&sess->policy.pcc_rule[i],
-                        &gx_message->session_data.pcc_rule[i]);
-        ogs_error("Adding PCC Rule to session [0x%x]",
-            sess->smf_n4_teid);
-        ogs_error("  > - Rule Name: %s", gx_message->session_data.pcc_rule[i].name);
-    }
-
-
-    /* APN-AMBR
-     * if PCRF changes APN-AMBR, this should be included. */
-    sess->gtp.create_session_response_apn_ambr = false;
-    if ((gx_message->session_data.session.ambr.uplink &&
-            (sess->session.ambr.uplink / 1000) !=
-                (gx_message->session_data.session.ambr.uplink / 1000)) ||
-        (gx_message->session_data.session.ambr.downlink &&
-            (sess->session.ambr.downlink / 1000) !=
-                (gx_message->session_data.session.ambr.downlink / 1000))) {
-
-        sess->session.ambr.downlink =
-            gx_message->session_data.session.ambr.downlink;
-        sess->session.ambr.uplink =
-            gx_message->session_data.session.ambr.uplink;
-
-        sess->gtp.create_session_response_apn_ambr = true;
-    }
-
-    /* Bearer QoS
-     * if PCRF changes Bearer QoS, this should be included. */
-    sess->gtp.create_session_response_bearer_qos = false;
-    if ((gx_message->session_data.session.qos.index &&
-        sess->session.qos.index !=
-            gx_message->session_data.session.qos.index) ||
-        (gx_message->session_data.session.qos.arp.priority_level &&
-        sess->session.qos.arp.priority_level !=
-            gx_message->session_data.session.qos.arp.priority_level) ||
-        sess->session.qos.arp.pre_emption_capability !=
-            gx_message->session_data.session.qos.arp.pre_emption_capability ||
-        sess->session.qos.arp.pre_emption_vulnerability !=
-            gx_message->session_data.
-                session.qos.arp.pre_emption_vulnerability) {
-
-        sess->session.qos.index = gx_message->session_data.session.qos.index;
-        sess->session.qos.arp.priority_level =
-            gx_message->session_data.session.qos.arp.priority_level;
-        sess->session.qos.arp.pre_emption_capability =
-            gx_message->session_data.session.qos.arp.pre_emption_capability;
-        sess->session.qos.arp.pre_emption_vulnerability =
-            gx_message->session_data.session.qos.arp.pre_emption_vulnerability;
-
-        sess->gtp.create_session_response_bearer_qos = true;
-    }
-
-    bearer = smf_default_bearer_in_sess(sess);
-    ogs_assert(bearer);
-
-    /* Setup CP/UP Data Forwarding PDR/FAR */
-    smf_sess_create_cp_up_data_forwarding(sess);
-
-    /* Setup QER */
-    if (sess->session.ambr.downlink || sess->session.ambr.uplink) {
-        /* Only 1 QER is used per bearer */
-        qer = bearer->qer;
-        if (!qer) {
-            qer = ogs_pfcp_qer_add(&sess->pfcp);
-            ogs_assert(qer);
-            bearer->qer = qer;
-        }
-
-        qer->mbr.uplink = sess->session.ambr.uplink;
-        qer->mbr.downlink = sess->session.ambr.downlink;
-    }
-
-    /* Setup FAR */
-    dl_far = bearer->dl_far;
-    ogs_assert(dl_far);
-    up2cp_far = sess->up2cp_far;
+    //veirfy
+    cp2up_pdr = sess->cp2up_pdr;
+    ogs_assert(cp2up_pdr);
+    up2cp_pdr = sess->up2cp_pdr;
+    ogs_assert(up2cp_pdr);
+    //end veirfy
     ogs_assert(up2cp_far);
 
-    dl_far->apply_action = OGS_PFCP_APPLY_ACTION_FORW;
 
+    /* Configure FARs */
+    if (dl_far) {
+        dl_far->apply_action = OGS_PFCP_APPLY_ACTION_FORW;
+        ogs_info("    Configured DL FAR with FORWARD action");
+    }
+
+    /// Veirfy
     /* Set Outer Header Creation to the Default DL FAR */
     ogs_assert(OGS_OK ==
         ogs_pfcp_ip_to_outer_header_creation(
@@ -370,15 +204,7 @@ uint32_t smf_gx_handle_cca_initial_request_old(
             &dl_far->outer_header_creation_len));
     dl_far->outer_header_creation.teid = bearer->sgw_s5u_teid;
 
-    /* Setup PDR */
-    dl_pdr = bearer->dl_pdr;
-    ogs_assert(dl_pdr);
-    ul_pdr = bearer->ul_pdr;
-    ogs_assert(ul_pdr);
-    cp2up_pdr = sess->cp2up_pdr;
-    ogs_assert(cp2up_pdr);
-    up2cp_pdr = sess->up2cp_pdr;
-    ogs_assert(up2cp_pdr);
+
 
     /* Set UE IP Address to the Default DL PDR */
     ogs_assert(OGS_OK ==
@@ -473,16 +299,123 @@ uint32_t smf_gx_handle_cca_initial_request_old(
         up2cp_pdr->f_teid.teid = bearer->pgw_s5u_teid;
     }
 
-    dl_pdr->precedence = OGS_PFCP_DEFAULT_PDR_PRECEDENCE;
-    ul_pdr->precedence = OGS_PFCP_DEFAULT_PDR_PRECEDENCE;
+    /// Verify
 
-    cp2up_pdr->precedence = OGS_PFCP_CP2UP_PDR_PRECEDENCE;
-    up2cp_pdr->precedence = OGS_PFCP_UP2CP_PDR_PRECEDENCE;
-
-    if (qer) {
-        ogs_pfcp_pdr_associate_qer(dl_pdr, qer);
-        ogs_pfcp_pdr_associate_qer(ul_pdr, qer);
+    if (up2cp_far) {
+        up2cp_far->apply_action = OGS_PFCP_APPLY_ACTION_FORW;
+        ogs_info("    Configured UP2CP FAR with FORWARD action");
     }
+
+    /* Associate URRs with PDRs and set up flow rules */
+    for (i = 0; i < num_rating_groups; i++) {
+        ogs_pfcp_urr_t *urr = rating_groups[i].urr;
+        if (urr) {
+            int rule_index;
+            ogs_info("    Setting up URR[%d] for Rating Group[%d]:",
+                     urr->id, rating_groups[i].rating_group);
+
+            /* Associate URR with PDRs */
+            if (ul_pdr) {
+                ogs_pfcp_pdr_associate_urr(ul_pdr, urr);
+                ogs_info("      - Associated with UL PDR");
+            }
+            if (dl_pdr) {
+                ogs_pfcp_pdr_associate_urr(dl_pdr, urr);
+                ogs_info("      - Associated with DL PDR");
+            }
+
+            /* Set up flow rules for this URR */
+            for (rule_index = 0; rule_index < sess->policy.num_of_pcc_rule; rule_index++) {
+                ogs_pcc_rule_t *pcc_rule = &sess->policy.pcc_rule[rule_index];
+                if (pcc_rule->rating_group == rating_groups[i].rating_group) {
+                    int flow_index;
+                    ogs_info("      - Adding flows from PCC Rule[%s]", pcc_rule->name);
+
+                    /* Add flow descriptions to PDRs */
+                    for (flow_index = 0; flow_index < pcc_rule->num_of_flow; flow_index++) {
+                        ogs_flow_t *flow = &pcc_rule->flow[flow_index];
+                        if (flow->direction == OGS_FLOW_UPLINK_ONLY ||
+                            flow->direction == OGS_FLOW_BIDIRECTIONAL) {
+                            if (ul_pdr) {
+                                ul_pdr->flow[ul_pdr->num_of_flow].description =
+                                    flow->description;
+                                ul_pdr->num_of_flow++;
+                                ogs_debug("        * UL Flow: %s", flow->description);
+                            }
+                        }
+                        if (flow->direction == OGS_FLOW_DOWNLINK_ONLY ||
+                            flow->direction == OGS_FLOW_BIDIRECTIONAL) {
+                            if (dl_pdr) {
+                                dl_pdr->flow[dl_pdr->num_of_flow].description =
+                                    flow->description;
+                                dl_pdr->num_of_flow++;
+                                ogs_debug("        * DL Flow: %s", flow->description);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /* Handle APN-AMBR updates */
+    sess->gtp.create_session_response_apn_ambr = false;
+    if ((gx_message->session_data.session.ambr.uplink &&
+            (sess->session.ambr.uplink / 1000) !=
+                (gx_message->session_data.session.ambr.uplink / 1000)) ||
+        (gx_message->session_data.session.ambr.downlink &&
+            (sess->session.ambr.downlink / 1000) !=
+                (gx_message->session_data.session.ambr.downlink / 1000))) {
+
+        sess->session.ambr.downlink =
+            gx_message->session_data.session.ambr.downlink;
+        sess->session.ambr.uplink =
+            gx_message->session_data.session.ambr.uplink;
+
+        sess->gtp.create_session_response_apn_ambr = true;
+    }
+
+    /* Handle Bearer QoS updates */
+    sess->gtp.create_session_response_bearer_qos = false;
+    if ((gx_message->session_data.session.qos.index &&
+        sess->session.qos.index !=
+            gx_message->session_data.session.qos.index) ||
+        (gx_message->session_data.session.qos.arp.priority_level &&
+        sess->session.qos.arp.priority_level !=
+            gx_message->session_data.session.qos.arp.priority_level) ||
+        sess->session.qos.arp.pre_emption_capability !=
+            gx_message->session_data.session.qos.arp.pre_emption_capability ||
+        sess->session.qos.arp.pre_emption_vulnerability !=
+            gx_message->session_data.session.qos.arp.pre_emption_vulnerability) {
+
+        sess->session.qos.index = gx_message->session_data.session.qos.index;
+        sess->session.qos.arp.priority_level =
+            gx_message->session_data.session.qos.arp.priority_level;
+        sess->session.qos.arp.pre_emption_capability =
+            gx_message->session_data.session.qos.arp.pre_emption_capability;
+        sess->session.qos.arp.pre_emption_vulnerability =
+            gx_message->session_data.session.qos.arp.pre_emption_vulnerability;
+
+        sess->gtp.create_session_response_bearer_qos = true;
+    }
+
+    /* Create CP/UP data forwarding */
+    smf_sess_create_cp_up_data_forwarding(sess);
+
+    /* Setup QER if AMBR is present */
+    if (sess->session.ambr.downlink || sess->session.ambr.uplink) {
+        ogs_pfcp_qer_t *qer = ogs_pfcp_qer_add(&sess->pfcp);
+        ogs_assert(qer);
+
+        qer->mbr.downlink = sess->session.ambr.downlink;
+        qer->mbr.uplink = sess->session.ambr.uplink;
+
+        if (qer) {
+            ogs_pfcp_pdr_associate_qer(dl_pdr, qer);
+            ogs_pfcp_pdr_associate_qer(ul_pdr, qer);
+        }
+    }
+
     return ER_DIAMETER_SUCCESS;
 }
 

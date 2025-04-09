@@ -20,11 +20,15 @@
 #ifndef SMF_GX_HANDLER_H
 #define SMF_GX_HANDLER_H
 
+
 #include "context.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+#define OGS_MAX_NUM_OF_FLOW 16
+
 
 uint32_t smf_gx_handle_cca_initial_request(
         smf_sess_t *sess, ogs_diam_gx_message_t *gx_message,

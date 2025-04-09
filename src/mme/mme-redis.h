@@ -10,7 +10,7 @@ extern "C" {
 
 typedef struct mme_redis_context_s {
     ogs_sockaddr_t *addr;
-    void *redis;  /* hiredis context */
+    void *redis;  /* hiredis context (redisContext*) */
     bool is_connected;
     ogs_timer_t *t_reconnect;
 } mme_redis_context_t;

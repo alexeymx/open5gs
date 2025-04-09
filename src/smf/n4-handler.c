@@ -820,6 +820,12 @@ uint8_t smf_epc_n4_handle_session_establishment_response(
 
     if (bearer->pgw_s5u_addr == NULL && bearer->pgw_s5u_addr6 == NULL) {
         ogs_error("No UP F-TEID");
+		if (bearer->pgw_s5u_addr == NULL) {
+			ogs_error("pgw_s5u_addr null");
+		}
+		if (bearer->pgw_s5u_addr6 == NULL) {
+			ogs_error("pgw_s5u_addr6 null");
+		}
         return OGS_PFCP_CAUSE_SESSION_CONTEXT_NOT_FOUND;
     }
 
@@ -1156,7 +1162,24 @@ uint8_t smf_epc_n4_handle_session_deletion_response(
                 &rep_trig, &use_rep->usage_report_trigger);
         sess->gy.reporting_reason =
             smf_pfcp_urr_usage_report_trigger2diam_gy_reporting_reason(&rep_trig);
+
+		if (bearer && bearer->urr) {
+			ogs_info("Removed urr_id %d", bearer->urr->id);
+            ogs_pfcp_urr_remove(bearer->urr);
+            bearer->urr = NULL;
+        }
     }
+
+	 /* Clean up any remaining URRs in the session */
+    ogs_list_for_each(&sess->pfcp.urr_list, bearer->urr) {
+        ogs_pfcp_urr_remove(bearer->urr);
+    }
+    ogs_list_init(&sess->pfcp.urr_list);
+
+  	ogs_list_for_each(&sess->pfcp.qer_list, bearer->qer) {
+        ogs_pfcp_qer_remove(bearer->qer);
+    }
+    ogs_list_init(&sess->pfcp.qer_list);
 
     return OGS_PFCP_CAUSE_REQUEST_ACCEPTED;
 }

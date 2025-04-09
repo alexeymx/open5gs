@@ -139,6 +139,8 @@ int mme_redis_update_ue(mme_ue_t *mme_ue)
     char key[128];
     int ret = OGS_OK;
 
+    ogs_warn("mme_redis_update_ue");
+
     ogs_assert(mme_ue);
     if (!self.is_connected || !self.redis) {
         ogs_error("Redis not connected");
@@ -147,31 +149,64 @@ int mme_redis_update_ue(mme_ue_t *mme_ue)
 
     /* Create JSON object with UE info */
     j_obj = json_object_new_object();
+    
+    ogs_warn("Creating JSON object for UE with IMSI: %s", mme_ue->imsi_bcd);
+    
     json_object_object_add(j_obj, "tac", 
         json_object_new_int(mme_ue->tai.tac));
+    ogs_warn("Added TAC: %d", mme_ue->tai.tac);
+    
     json_object_object_add(j_obj, "mme_id", 
         json_object_new_string(mme_self()->mme_name));
-    json_object_object_add(j_obj, "mme_host", 
-        json_object_new_string(ogs_gethostname(self.addr)));
+    ogs_warn("Added MME_ID: %s", mme_self()->mme_name);
+    
+
+    
+    //json_object_object_add(j_obj, "mme_host",
+    //    json_object_new_string(hostname));
+    //ogs_warn("Added MME_HOST: %s", hostname);
+    
     json_object_object_add(j_obj, "timestamp", 
         json_object_new_int64(ogs_time_now()));
-
+    ogs_warn("Added timestamp");
+    
     json_str = (char*)json_object_to_json_string(j_obj);
-    snprintf(key, sizeof(key), "mme_%s", mme_ue->imsi_bcd);
+    ogs_warn("JSON string created: %s", json_str);
 
-    reply = redisCommand(self.redis, "SET %s %s", key, json_str);
-    if (!reply) {
-        ogs_error("Redis SET command failed");
+    snprintf(key, sizeof(key), "mme_%s", mme_ue->imsi_bcd);
+    ogs_warn("Redis key: %s", key);
+    
+    /* Check Redis connection before sending command */
+    if (self.redis == NULL) {
+        ogs_error("Redis context is NULL before sending command");
         ret = OGS_ERROR;
         goto cleanup;
     }
     
-    if (reply->type == REDIS_REPLY_ERROR) {
-        ogs_error("Redis error: %s", reply->str);
-        ret = OGS_ERROR;
-    }
+    ogs_warn("Sending Redis SET command");
+    reply = redisCommand(self.redis, "SET %s %s", key, json_str);
+    
+    if (!reply) {
+        ogs_error("Redis SET command failed - reply is NULL");
+        
 
+        ret = OGS_ERROR;
+        goto cleanup;
+    } else {
+        ogs_info("Redis SET command returned a reply");
+    }
+    
+    if (reply->type == REDIS_REPLY_ERROR) {
+        ogs_error("Redis error in reply: %s", reply->str);
+        ret = OGS_ERROR;
+    } else if (reply->type == REDIS_REPLY_STATUS) {
+        ogs_info("Redis SET command succeeded with status: %s", reply->str);
+    } else {
+        ogs_info("Redis SET command returned reply of type: %d", reply->type);
+    }
+    
     freeReplyObject(reply);
+    ogs_warn("Redis reply object freed");
 
 cleanup:
     json_object_put(j_obj);
@@ -191,16 +226,30 @@ int mme_redis_remove_ue(mme_ue_t *mme_ue)
     }
 
     snprintf(key, sizeof(key), "mme_%s", mme_ue->imsi_bcd);
+    ogs_warn("Removing Redis key: %s", key);
     
     reply = redisCommand(self.redis, "DEL %s", key);
     if (!reply) {
         ogs_error("Redis DEL command failed");
+        
+        /* Check if connection was lost */
+        if (self.redis) {
+            redisContext *redis_ctx = (redisContext *)self.redis;
+            if (redis_ctx->err) {
+                ogs_error("Redis error: %s", redis_ctx->errstr);
+                /* Mark as disconnected to trigger reconnection */
+                self.is_connected = false;
+            }
+        }
+        
         return OGS_ERROR;
     }
 
     if (reply->type == REDIS_REPLY_ERROR) {
         ogs_error("Redis error: %s", reply->str);
         ret = OGS_ERROR;
+    } else if (reply->type == REDIS_REPLY_INTEGER) {
+        ogs_info("Redis DEL command removed %lld keys", reply->integer);
     }
 
     freeReplyObject(reply);

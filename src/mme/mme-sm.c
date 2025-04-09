@@ -355,18 +355,19 @@ void mme_state_operational(ogs_fsm_t *s, mme_event_t *e)
 
         // Added redis logic for UE context management AI
         switch (nas_message.emm.h.message_type) {
-        case OGS_NAS_EPS_ATTACH_COMPLETE:
-            /* After successful attach */
-            mme_redis_update_ue(mme_ue);
-            break;
-        case OGS_NAS_EPS_DETACH_REQUEST:
-            /* Before processing detach */
-            mme_redis_remove_ue(mme_ue);
-            break;
-        case OGS_NAS_EPS_TRACKING_AREA_UPDATE_COMPLETE:
-            /* After TAU complete */
-            mme_redis_update_ue(mme_ue);
-            break;
+            case OGS_NAS_EPS_ATTACH_COMPLETE:
+                /* After successful attach */
+
+                mme_redis_update_ue(mme_ue);
+                break;
+            case OGS_NAS_EPS_DETACH_REQUEST:
+                /* Before processing detach */
+                mme_redis_remove_ue(mme_ue);
+                break;
+            case OGS_NAS_EPS_TRACKING_AREA_UPDATE_COMPLETE:
+                /* After TAU complete */
+                mme_redis_update_ue(mme_ue);
+                break;
         }
         // End of redis logic for UE context management AI
 
