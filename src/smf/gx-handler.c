@@ -170,12 +170,15 @@ uint32_t smf_gx_handle_cca_initial_request(
     bearer = smf_default_bearer_in_sess(sess);
     ogs_assert(bearer);
 
+    /* Create CP/UP data forwarding */
+    smf_sess_create_cp_up_data_forwarding(sess);
+
+
     /* Initialize PDRs and FARs from bearer */
     dl_pdr = bearer->dl_pdr;
     ul_pdr = bearer->ul_pdr;
     dl_far = bearer->dl_far;
     up2cp_far = sess->up2cp_far;
-    //qer = bearer->qer;
 
     ogs_assert(dl_pdr);
     ogs_assert(ul_pdr);
@@ -398,9 +401,6 @@ uint32_t smf_gx_handle_cca_initial_request(
 
         sess->gtp.create_session_response_bearer_qos = true;
     }
-
-    /* Create CP/UP data forwarding */
-    smf_sess_create_cp_up_data_forwarding(sess);
 
     /* Setup QER if AMBR is present */
     if (sess->session.ambr.downlink || sess->session.ambr.uplink) {

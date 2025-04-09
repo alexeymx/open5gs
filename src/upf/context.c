@@ -782,7 +782,7 @@ void upf_sess_urr_acc_add(upf_sess_t *sess, ogs_pfcp_urr_t *urr, size_t size, bo
     upf_sess_urr_acc_t *urr_acc = NULL;
     uint64_t vol;
 
-    ogs_assert(urr->id > 0 && urr->id <= OGS_MAX_NUM_OF_URR);
+    ogs_assert(urr->id > 0);
     urr_acc = &sess->urr_acc[urr->id-1];
 
     /* Add verbose logging for initial packet tracking */
@@ -866,7 +866,7 @@ void upf_sess_urr_acc_fill_usage_report(upf_sess_t *sess, const ogs_pfcp_urr_t *
     ogs_time_t last_report_timestamp;
     ogs_time_t now;
 
-    ogs_assert(urr->id > 0 && urr->id <= OGS_MAX_NUM_OF_URR);
+    ogs_assert(urr->id > 0);
     urr_acc = &sess->urr_acc[urr->id-1];
 
     now = ogs_time_now(); /* we need UTC for start_time and end_time */
@@ -925,7 +925,7 @@ void upf_sess_urr_acc_snapshot(upf_sess_t *sess, ogs_pfcp_urr_t *urr)
 {
     upf_sess_urr_acc_t *urr_acc = NULL;
 
-    ogs_assert(urr->id > 0 && urr->id <= OGS_MAX_NUM_OF_URR);
+    ogs_assert(urr->id > 0);
     urr_acc = &sess->urr_acc[urr->id-1];
 
     urr_acc->last_report.total_octets = urr_acc->total_octets;
@@ -965,7 +965,7 @@ static void upf_sess_urr_acc_validity_time_setup(upf_sess_t *sess, ogs_pfcp_urr_
 {
     upf_sess_urr_acc_t *urr_acc = NULL;
 
-    ogs_assert(urr->id > 0 && urr->id <= OGS_MAX_NUM_OF_URR);
+    ogs_assert(urr->id > 0);
     urr_acc = &sess->urr_acc[urr->id-1];
 
     ogs_debug("Installing URR Quota Validity Time timer");
@@ -981,7 +981,7 @@ static void upf_sess_urr_acc_time_quota_setup(upf_sess_t *sess, ogs_pfcp_urr_t *
 {
     upf_sess_urr_acc_t *urr_acc = NULL;
 
-    ogs_assert(urr->id > 0 && urr->id <= OGS_MAX_NUM_OF_URR);
+    ogs_assert(urr->id > 0);
     urr_acc = &sess->urr_acc[urr->id-1];
 
     ogs_debug("Installing URR Time Quota timer");
@@ -996,7 +996,7 @@ static void upf_sess_urr_acc_time_threshold_setup(upf_sess_t *sess, ogs_pfcp_urr
 {
     upf_sess_urr_acc_t *urr_acc = NULL;
 
-    ogs_assert(urr->id > 0 && urr->id <= OGS_MAX_NUM_OF_URR);
+    ogs_assert(urr->id > 0);
     urr_acc = &sess->urr_acc[urr->id-1];
 
     ogs_debug("Installing URR Time Threshold timer");
@@ -1012,7 +1012,7 @@ void upf_sess_urr_acc_timers_setup(upf_sess_t *sess, ogs_pfcp_urr_t *urr)
 {
     upf_sess_urr_acc_t *urr_acc = NULL;
 
-    ogs_assert(urr->id > 0 && urr->id <= OGS_MAX_NUM_OF_URR);
+    ogs_assert(urr->id > 0);
     urr_acc = &sess->urr_acc[urr->id-1];
 
     urr_acc->time_start = ogs_time_ntp32_now();
