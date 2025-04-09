@@ -786,7 +786,7 @@ void upf_sess_urr_acc_add(upf_sess_t *sess, ogs_pfcp_urr_t *urr, size_t size, bo
     urr_acc = &sess->urr_acc[urr->id-1];
 
     /* Add verbose logging for initial packet tracking */
-    ogs_debug("URR[%d] Rating Group[%d] Adding %zu bytes (%s)",
+    ogs_info("URR[%d] Rating Group[%d] Adding %zu bytes (%s)",
               urr->id, urr->rating_group, size,
               is_uplink ? "Uplink" : "Downlink");
 
@@ -804,7 +804,7 @@ void upf_sess_urr_acc_add(upf_sess_t *sess, ogs_pfcp_urr_t *urr, size_t size, bo
     urr_acc->time_of_last_packet = ogs_time_now();
     if (urr_acc->time_of_first_packet == 0) {
         urr_acc->time_of_first_packet = urr_acc->time_of_last_packet;
-        ogs_debug("URR[%d] Rating Group[%d] First packet received",
+        ogs_info("URR[%d] Rating Group[%d] First packet received",
                  urr->id, urr->rating_group);
     }
 
@@ -813,7 +813,7 @@ void upf_sess_urr_acc_add(upf_sess_t *sess, ogs_pfcp_urr_t *urr, size_t size, bo
 
     /* Log quota status before checking thresholds */
     if (urr->rep_triggers.volume_quota && urr->vol_quota.tovol) {
-        ogs_debug("URR[%d] Rating Group[%d] Volume Status: Current=[%" PRIu64 "]  Quota=[%" PRIu64 "] ",
+        ogs_info("URR[%d] Rating Group[%d] Volume Status: Current=[%" PRIu64 "]  Quota=[%" PRIu64 "] ",
          urr->id, urr->rating_group, vol, urr->vol_quota.total_volume);
     }
 
@@ -852,7 +852,7 @@ void upf_sess_urr_acc_add(upf_sess_t *sess, ogs_pfcp_urr_t *urr, size_t size, bo
 
         /* Start new report period/iteration: */
         upf_sess_urr_acc_timers_setup(sess, urr);
-        ogs_debug("URR[%d] Rating Group[%d] New monitoring period started",
+        ogs_info("URR[%d] Rating Group[%d] New monitoring period started",
                  urr->id, urr->rating_group);
     }
 }

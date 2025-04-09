@@ -24,6 +24,8 @@
 #include "fd-path.h"
 #include "gx-handler.h"
 #include "binding.h"
+#include <stdlib.h>
+#include <string.h>
 
 /* Returns ER_DIAMETER_SUCCESS on success, Diameter error code on failue. */
 
@@ -36,20 +38,12 @@ uint32_t smf_gx_handle_cca_initial_request(
     ogs_pfcp_pdr_t *dl_pdr = NULL;
     ogs_pfcp_pdr_t *ul_pdr = NULL;
     ogs_pfcp_far_t *dl_far = NULL;
-    //ogs_pfcp_qer_t *qer = NULL;
     ogs_pfcp_far_t *up2cp_far = NULL;
     ogs_pfcp_pdr_t *cp2up_pdr = NULL;
     ogs_pfcp_pdr_t *up2cp_pdr = NULL;
 
 
     bool is_ims_apn = false;
-
-    struct {
-        uint32_t rating_group;
-        uint32_t num_rules;
-        ogs_pfcp_urr_t *urr;
-    } rating_groups[OGS_MAX_NUM_OF_PCC_RULE];
-    int num_rating_groups = 0;
 
     ogs_assert(sess);
     ogs_assert(gx_message);
@@ -73,68 +67,68 @@ uint32_t smf_gx_handle_cca_initial_request(
                                    ER_DIAMETER_AUTHENTICATION_REJECTED;
         }
 
+
         /* First pass: Collect unique rating groups and their rules */
         for (i = 0; i < gx_message->session_data.num_of_pcc_rule; i++) {
             ogs_pcc_rule_t *pcc_rule = &gx_message->session_data.pcc_rule[i];
+
             if (pcc_rule->rating_group) {
-                /* Check if rating group already exists */
-                int j;
-                bool found = false;
-                for (j = 0; j < num_rating_groups; j++) {
-                    if (rating_groups[j].rating_group == pcc_rule->rating_group) {
-                        rating_groups[j].num_rules++;
-                        found = true;
-                        break;
-                    }
+                ogs_pfcp_pdr_t *rg_pdr = ogs_pfcp_pdr_add(&sess->pfcp);
+        		ogs_assert(rg_pdr);
+				rg_pdr->id = pcc_rule->rating_group;
+				rg_pdr->src_if = OGS_PFCP_INTERFACE_ACCESS; // or CORE, depending on direction
+		        //ogs_pfcp_paa_to_ue_ip_addr(&sess->paa, &rg_pdr->ue_ip_addr, &rg_pdr->ue_ip_addr_len);
+		        for (int j = 0; j < pcc_rule->num_of_flow; j++) {
+                  ogs_flow_t *flow = &pcc_rule->flow[j];
+		          rg_pdr->flow[rg_pdr->num_of_flow].fd = j + 1;
+		          rg_pdr->flow[rg_pdr->num_of_flow].description = flow->description;
+
+		          rg_pdr->num_of_flow++;
                 }
+				// Create a new FAR for this PDR
+        		ogs_pfcp_far_t *rg_far = ogs_pfcp_far_add(&sess->pfcp);
+        		ogs_assert(rg_far);
+        		rg_far->apply_action = OGS_PFCP_APPLY_ACTION_FORW;
+        		ogs_pfcp_pdr_associate_far(rg_pdr, rg_far);
 
-                /* Add new rating group if not found */
-                if (!found && num_rating_groups < OGS_MAX_NUM_OF_PCC_RULE) {
-                    rating_groups[num_rating_groups].rating_group = pcc_rule->rating_group;
-                    rating_groups[num_rating_groups].num_rules = 1;
-                    num_rating_groups++;
-                }
-            }
-        }
+        		// Create a new QER for this PDR
+        		ogs_pfcp_qer_t *rg_qer = ogs_pfcp_qer_add(&sess->pfcp);
+        		ogs_assert(rg_qer);
+        		// Configure QER parameters here
+        		ogs_pfcp_pdr_associate_qer(rg_pdr, rg_qer);
 
-        /* Create URRs for each unique rating group */
-        for (i = 0; i < num_rating_groups; i++) {
-            ogs_pfcp_urr_t *urr = NULL;
-
-            /* Create new URR for this rating group */
-            urr = ogs_pfcp_urr_add(&sess->pfcp);
-            if (!urr) {
-                ogs_error("Failed to create URR");
-                return ER_DIAMETER_UNABLE_TO_COMPLY;
-            }
-
-            /* Store URR reference */
-            rating_groups[i].urr = urr;
-
-            /* Configure URR for usage monitoring */
-            urr->meas_method = OGS_PFCP_MEASUREMENT_METHOD_VOLUME |
+        		// Create a new URR for this PDR
+        		ogs_pfcp_urr_t *rg_urr = ogs_pfcp_urr_add(&sess->pfcp);
+				// Add RG URR messure types
+				rg_urr->meas_method = OGS_PFCP_MEASUREMENT_METHOD_VOLUME |
                               OGS_PFCP_MEASUREMENT_METHOD_DURATION;
 
-            /* Configure volume thresholds based on PCC rules */
-            urr->vol_threshold.flags = OGS_PFCP_VOLUME_MEASUREMENT_TYPE;
-            urr->vol_threshold.total_volume = 0;  /* Will be set by PCC rules */
-            urr->vol_threshold.downlink_volume = 0;  /* Will be set by PCC rules */
-            urr->vol_threshold.uplink_volume = 0;  /* Will be set by PCC rules */
 
-            /* Configure time threshold */
-            urr->time_threshold = 3600;  /* 1 hour in seconds */
 
-            /* Set reporting triggers */
-            urr->rep_triggers.volume_threshold = 1;
-            urr->rep_triggers.time_threshold = 1;
+            	/* Configure volume thresholds based on PCC rules */
+            	rg_urr->vol_threshold.flags = OGS_PFCP_VOLUME_MEASUREMENT_TYPE;
+            	rg_urr->vol_threshold.total_volume = 100000;  /* Will be set by PCC rules */
+            	rg_urr->vol_threshold.downlink_volume = 100000;  /* Will be set by PCC rules */
+            	rg_urr->vol_threshold.uplink_volume = 100000;  /* Will be set by PCC rules */
 
-            /* Store rating group in URR context */
-            urr->id = rating_groups[i].rating_group;
+            	/* Configure time threshold */
+            	rg_urr->time_threshold = 3600;  /* 1 hour in seconds  3600 for now 60 */
 
-            ogs_info("    Created URR[%d] for Rating Group[%d] with %d rules",
-                     urr->id, rating_groups[i].rating_group,
-                     rating_groups[i].num_rules);
+            	/* Set reporting triggers */
+            	rg_urr->rep_triggers.volume_threshold = 1;
+            	rg_urr->rep_triggers.time_threshold = 1;
+
+
+        		ogs_assert(rg_urr);
+        		// Configure URR parameters here
+        		ogs_pfcp_pdr_associate_urr(rg_pdr, rg_urr);
+
+        		ogs_info("Configured PDR, FAR, QER, and URR for PCC Rule[%s]", pcc_rule->name);
+
+
+            }
         }
+
     }
 
     /* Store PCC rules */
@@ -206,7 +200,6 @@ uint32_t smf_gx_handle_cca_initial_request(
             &dl_far->outer_header_creation,
             &dl_far->outer_header_creation_len));
     dl_far->outer_header_creation.teid = bearer->sgw_s5u_teid;
-
 
 
     /* Set UE IP Address to the Default DL PDR */
@@ -308,58 +301,72 @@ uint32_t smf_gx_handle_cca_initial_request(
         up2cp_far->apply_action = OGS_PFCP_APPLY_ACTION_FORW;
         ogs_info("    Configured UP2CP FAR with FORWARD action");
     }
+    /// Set Default URR
+    ogs_pfcp_urr_t *urr = ogs_pfcp_urr_add(&sess->pfcp);
 
-    /* Associate URRs with PDRs and set up flow rules */
-    for (i = 0; i < num_rating_groups; i++) {
-        ogs_pfcp_urr_t *urr = rating_groups[i].urr;
-        if (urr) {
-            int rule_index;
-            ogs_info("    Setting up URR[%d] for Rating Group[%d]:",
-                     urr->id, rating_groups[i].rating_group);
+    urr->meas_method = OGS_PFCP_MEASUREMENT_METHOD_VOLUME |
+                  OGS_PFCP_MEASUREMENT_METHOD_DURATION;
 
-            /* Associate URR with PDRs */
-            if (ul_pdr) {
-                ogs_pfcp_pdr_associate_urr(ul_pdr, urr);
-                ogs_info("      - Associated with UL PDR");
-            }
-            if (dl_pdr) {
-                ogs_pfcp_pdr_associate_urr(dl_pdr, urr);
-                ogs_info("      - Associated with DL PDR");
-            }
+    /* Configure volume thresholds based on PCC rules */
+    urr->vol_threshold.flags = OGS_PFCP_VOLUME_MEASUREMENT_TYPE;
+    urr->vol_threshold.total_volume = 100000;  /* Will be set by PCC rules */
+    urr->vol_threshold.downlink_volume = 100000;  /* Will be set by PCC rules */
+    urr->vol_threshold.uplink_volume = 100000;  /* Will be set by PCC rules */
 
-            /* Set up flow rules for this URR */
-            for (rule_index = 0; rule_index < sess->policy.num_of_pcc_rule; rule_index++) {
-                ogs_pcc_rule_t *pcc_rule = &sess->policy.pcc_rule[rule_index];
-                if (pcc_rule->rating_group == rating_groups[i].rating_group) {
-                    int flow_index;
-                    ogs_info("      - Adding flows from PCC Rule[%s]", pcc_rule->name);
+    /* Configure Default time threshold */
+    urr->time_threshold = 3600;  /* 1 hour in seconds  3600 for now 60 */
 
-                    /* Add flow descriptions to PDRs */
-                    for (flow_index = 0; flow_index < pcc_rule->num_of_flow; flow_index++) {
-                        ogs_flow_t *flow = &pcc_rule->flow[flow_index];
-                        if (flow->direction == OGS_FLOW_UPLINK_ONLY ||
-                            flow->direction == OGS_FLOW_BIDIRECTIONAL) {
-                            if (ul_pdr) {
-                                ul_pdr->flow[ul_pdr->num_of_flow].description =
-                                    flow->description;
-                                ul_pdr->num_of_flow++;
-                                ogs_debug("        * UL Flow: %s", flow->description);
-                            }
-                        }
-                        if (flow->direction == OGS_FLOW_DOWNLINK_ONLY ||
-                            flow->direction == OGS_FLOW_BIDIRECTIONAL) {
-                            if (dl_pdr) {
-                                dl_pdr->flow[dl_pdr->num_of_flow].description =
-                                    flow->description;
-                                dl_pdr->num_of_flow++;
-                                ogs_debug("        * DL Flow: %s", flow->description);
-                            }
-                        }
-                    }
-                }
-            }
+    /* Set Default reporting triggers */
+    urr->rep_triggers.volume_threshold = 1;
+    urr->rep_triggers.time_threshold = 1;
+
+    ogs_assert(urr);
+    // Configure URR parameters here
+
+    /// Defaults
+    if (ul_pdr) {
+        ul_pdr->flow[ul_pdr->num_of_flow].description = malloc(strlen("permit out 6 from any to any") + 1);
+        //ul_pdr->flow[ul_pdr->num_of_flow].fd = "2";
+        if (ul_pdr->flow[ul_pdr->num_of_flow].description) {
+            strcpy(ul_pdr->flow[ul_pdr->num_of_flow].description, "permit out 6 from any to any");
         }
+
+        ul_pdr->num_of_flow++;
+
+        ul_pdr->flow[ul_pdr->num_of_flow].description = malloc(strlen("permit out 17 from any to any") + 1);
+        //ul_pdr->flow[ul_pdr->num_of_flow].fd = "2";
+        if (ul_pdr->flow[ul_pdr->num_of_flow].description) {
+            strcpy(ul_pdr->flow[ul_pdr->num_of_flow].description, "permit out 17 from any to any");
+        }
+
+        ul_pdr->num_of_flow++;
+
+        ogs_pfcp_pdr_associate_urr(ul_pdr, urr);
+        ogs_info("      - Associated with Default UL PDR");
+
     }
+    if (dl_pdr) {
+        dl_pdr->flow[dl_pdr->num_of_flow].description = malloc(strlen("permit out 6 from any to any") + 1);
+        //ul_pdr->flow[ul_pdr->num_of_flow].fd = "2";
+
+        if (dl_pdr->flow[dl_pdr->num_of_flow].description) {
+            strcpy(dl_pdr->flow[dl_pdr->num_of_flow].description, "permit out 6 from any to any");
+        }
+        dl_pdr->num_of_flow++;
+
+        dl_pdr->flow[dl_pdr->num_of_flow].description = malloc(strlen("permit out 17 from any to any") + 1);
+        //ul_pdr->flow[ul_pdr->num_of_flow].fd = "2";
+
+        if (dl_pdr->flow[dl_pdr->num_of_flow].description) {
+            strcpy(dl_pdr->flow[dl_pdr->num_of_flow].description, "permit out 17 from any to any");
+        }
+        dl_pdr->num_of_flow++;
+
+        ogs_pfcp_pdr_associate_urr(dl_pdr, urr);
+        ogs_pfcp_pdr_associate_far(dl_pdr, dl_far);
+        ogs_info("      - Associated with Default DL PDR");
+    }
+
 
     /* Handle APN-AMBR updates */
     sess->gtp.create_session_response_apn_ambr = false;

@@ -369,10 +369,12 @@ void ogs_pfcp_build_create_pdr(
 
     memset(pfcp_sdf_filter, 0, sizeof(pfcp_sdf_filter));
     for (j = 0; j < pdr->num_of_flow && j < OGS_MAX_NUM_OF_FLOW_IN_PDR; j++) {
-        ogs_assert(pdr->flow[j].fd || pdr->flow[j].bid);
+        //ogs_assert(pdr->flow[j].fd || pdr->flow[j].bid); /// AI
+        ogs_assert(pdr->flow[j].description || pdr->flow[j].bid);
 
-        if (pdr->flow[j].fd) {
-            pfcp_sdf_filter[j].fd = 1;
+        if (pdr->flow[j].description) {
+        //if (pdr->flow[j].fd) {
+            pfcp_sdf_filter[j].fd = 1 + j; // added + j AI
             pfcp_sdf_filter[j].flow_description_len =
                     strlen(pdr->flow[j].description);
             pfcp_sdf_filter[j].flow_description = pdr->flow[j].description;
@@ -516,10 +518,11 @@ void ogs_pfcp_build_update_pdr(
 
         memset(pfcp_sdf_filter, 0, sizeof(pfcp_sdf_filter));
         for (j = 0; j < pdr->num_of_flow && j < OGS_MAX_NUM_OF_FLOW_IN_PDR; j++) {
-            ogs_assert(pdr->flow[j].fd || pdr->flow[j].bid);
+            //ogs_assert(pdr->flow[j].fd || pdr->flow[j].bid);
+            ogs_assert(pdr->flow[j].description || pdr->flow[j].bid);
 
-            if (pdr->flow[j].fd) {
-                pfcp_sdf_filter[j].fd = 1;
+            if (pdr->flow[j].description) {
+                pfcp_sdf_filter[j].fd = 1 + j;
                 pfcp_sdf_filter[j].flow_description_len =
                         strlen(pdr->flow[j].description);
                 pfcp_sdf_filter[j].flow_description = pdr->flow[j].description;
